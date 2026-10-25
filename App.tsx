@@ -37,7 +37,8 @@ import {
   ChevronDown,
   ExternalLink,
   ShieldCheck,
-  Link as LinkIcon
+  Link as LinkIcon,
+  X as XIcon
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -50,16 +51,23 @@ import {
   CartesianGrid 
 } from 'recharts';
 import ReactMarkdown from 'react-markdown';
-import * as pdfjsLib from 'pdfjs-dist';
 
 // Components & Services
 import ConceptGraph from './components/ConceptGraph';
 import ChatInterface from './components/ChatInterface';
-import { analyzePaper, generateExtendedAnalysis, findRelatedWork, translateText, fetchCustomModels, performWebSearch } from './services/geminiService';
+import { analyzePaper, generateExtendedAnalysis, findRelatedWork, translateText, fetchCustomModels, performWebSearch, setGeminiConfig, listGeminiModels, pickModel, MissingKeyError, GeminiConfig, DEFAULT_FAST_MODEL, DEFAULT_SMART_MODEL } from './services/geminiService';
 import { AnalysisResult, RelatedPaper, AnalysisStatus, SupportedLanguage, UILanguage, CustomAIConfig, ModelOption, SearchResult } from './types';
 
 // Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// pdf.js (about 1.6 MB with its worker) loads only when a PDF is uploaded
+const loadPdfjs = async () => {
+  const [pdfjsLib, worker] = await Promise.all([
+    import('pdfjs-dist'),
+    import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+  ]);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = worker.default;
+  return pdfjsLib;
+};
 
 const SAMPLE_TEXT_EN = `The inductive bias of the Transformer architecture, characterized by its lack of recurrence and reliance on self-attention mechanisms, has fundamentally altered the landscape of Natural Language Processing (NLP). Formally, the scaled dot-product attention is defined as Attention(Q, K, V) = softmax(QK^T / sqrt(d_k))V, facilitating the modeling of long-range dependencies without the vanishing gradient problems inherent in Recurrent Neural Networks (RNNs). However, the quadratic time and space complexity with respect to sequence length, O(L^2), poses significant scalability challenges. Recent research has pivoted towards linearized attention mechanisms and sparse approximations, such as the Reformer and Linformer, to mitigate these bottlenecks. Furthermore, the pre-training and fine-tuning paradigm, exemplified by BERT and GPT, leverages self-supervised learning on massive corpora to learn contextualized representations. Optimizing these over-parameterized models often involves navigating a non-convex loss landscape, where techniques like AdamW optimizers and learning rate warm-ups are crucial for convergence. More recently, parameter-efficient fine-tuning (PEFT) methods like Low-Rank Adaptation (LoRA) have emerged, freezing pre-trained weights and injecting rank-decomposition matrices to adapt models to downstream tasks with minimal computational overhead. Moreover, the emergence of in-context learning capabilities in Large Language Models (LLMs) challenges traditional understanding of generalization, suggesting that these models implicitly perform Bayesian inference or gradient descent during the forward pass of inference.`;
 
@@ -147,7 +155,7 @@ const translations = {
     noBookmarks: "No saved papers yet.",
     noTopics: "No topics tracked yet.",
     defaultSystemModels: "Default System Models",
-    defaultModelsDesc: "These models are powered by Google Gemini and are used when Custom AI is disabled.",
+    defaultModelsDesc: "Chosen from the models your key can use. Custom AI below, when enabled, replaces the reasoning model for Deep Analysis.",
     fastModel: "Fast Model (Analysis, Chat)",
     reasoningModel: "Reasoning Model (Deep Analysis, Search)",
     entityDist: "Entity Distribution",
@@ -158,7 +166,26 @@ const translations = {
     searchPlaceholder: "Search for concepts, facts, or data...",
     searchBtn: "Search",
     sources: "Sources",
-    searching: "Searching..."
+    searching: "Searching...",
+    geminiKeyTitle: "Gemini API Key",
+    geminiKeyDesc: "Analysis, translation, search and Q&A run on Google Gemini with your own key. Bind one before you start.",
+    geminiKeyPrivacy: "Your key is kept only in this browser. Requests go directly from your browser to the address below; this site's server never sees the key or your text.",
+    getKeyLink: "Get a free key at Google AI Studio",
+    geminiBaseUrl: "API address (optional)",
+    geminiBaseUrlHint: "Leave empty for the official endpoint. Fill in a Gemini-compatible proxy if Google is not reachable from your network.",
+    rememberKey: "Remember on this device (otherwise cleared when the tab closes)",
+    verifyKey: "Verify & load models",
+    removeKey: "Unbind",
+    keyBound: "Key bound",
+    keyNotBound: "Not bound",
+    keyVerified: "Key works: {n} models available.",
+    keyCheckFailed: "Key check failed: ",
+    needKeyTitle: "Bind your Gemini API key first",
+    needKeyDesc: "This demo does not ship with a key. Add your own in Settings; it stays in your browser.",
+    bindKeyBtn: "Bind API Key",
+    requestFailed: "Request failed: ",
+    networkError: "Cannot reach the API address. Check your network, or fill in a reachable proxy address in Settings.",
+    dismiss: "Dismiss"
   },
   zh: {
     analysis: "分析报告",
@@ -241,7 +268,7 @@ const translations = {
     noBookmarks: "暂无收藏论文。",
     noTopics: "暂无关注主题。",
     defaultSystemModels: "默认系统模型",
-    defaultModelsDesc: "当禁用自定义 AI 时，系统将使用由 Google Gemini 驱动的以下模型。",
+    defaultModelsDesc: "从你的 Key 可用的模型中选择。启用下方的自定义 AI 后，深度分析将改用自定义模型。",
     fastModel: "快速模型 (分析, 问答)",
     reasoningModel: "推理模型 (深度分析, 搜索)",
     entityDist: "实体分布",
@@ -252,7 +279,26 @@ const translations = {
     searchPlaceholder: "搜索概念、事实或数据...",
     searchBtn: "搜索",
     sources: "来源",
-    searching: "搜索中..."
+    searching: "搜索中...",
+    geminiKeyTitle: "Gemini API Key",
+    geminiKeyDesc: "分析、翻译、搜索与问答都由 Google Gemini 完成，需要使用你自己的 API Key。开始前请先绑定。",
+    geminiKeyPrivacy: "Key 只保存在当前浏览器里。请求由你的浏览器直接发往下方地址，本站服务器既看不到 Key，也看不到你提交的文本。",
+    getKeyLink: "在 Google AI Studio 免费申请 Key",
+    geminiBaseUrl: "接口地址（选填）",
+    geminiBaseUrlHint: "留空即使用官方接口。如果你的网络无法直连 Google，可以填写兼容 Gemini 格式的代理地址。",
+    rememberKey: "在此设备上记住（不勾选则关闭标签页后清除）",
+    verifyKey: "验证并获取模型",
+    removeKey: "解除绑定",
+    keyBound: "已绑定",
+    keyNotBound: "未绑定",
+    keyVerified: "验证通过，可用模型 {n} 个。",
+    keyCheckFailed: "验证失败：",
+    needKeyTitle: "请先绑定 Gemini API Key",
+    needKeyDesc: "本演示不附带 Key，请在「设置」中填入你自己的 Key，它只保存在你的浏览器里。",
+    bindKeyBtn: "绑定 API Key",
+    requestFailed: "请求失败：",
+    networkError: "无法连接接口地址。请检查网络，或在「设置」中填写可以访问的代理地址。",
+    dismiss: "关闭"
   },
   ko: {
     analysis: "분석 보고서",
@@ -335,7 +381,7 @@ const translations = {
     noBookmarks: "저장된 논문이 없습니다.",
     noTopics: "추적 중인 주제가 없습니다.",
     defaultSystemModels: "기본 시스템 모델",
-    defaultModelsDesc: "사용자 지정 AI가 비활성화된 경우, Google Gemini 기반의 다음 모델이 사용됩니다.",
+    defaultModelsDesc: "키로 사용할 수 있는 모델 중에서 선택합니다. 아래 사용자 지정 AI를 켜면 심층 분석은 해당 모델을 사용합니다.",
     fastModel: "빠른 모델 (분석, 채팅)",
     reasoningModel: "추론 모델 (심층 분석, 검색)",
     entityDist: "엔티티 분포",
@@ -346,7 +392,26 @@ const translations = {
     searchPlaceholder: "개념, 사실, 또는 데이터를 검색...",
     searchBtn: "검색",
     sources: "출처",
-    searching: "검색 중..."
+    searching: "검색 중...",
+    geminiKeyTitle: "Gemini API 키",
+    geminiKeyDesc: "분석, 번역, 검색, Q&A는 본인의 키로 Google Gemini에서 실행됩니다. 시작하기 전에 키를 등록하세요.",
+    geminiKeyPrivacy: "키는 이 브라우저에만 저장됩니다. 요청은 브라우저에서 아래 주소로 직접 전송되며, 이 사이트의 서버는 키나 텍스트를 볼 수 없습니다.",
+    getKeyLink: "Google AI Studio에서 무료 키 발급",
+    geminiBaseUrl: "API 주소 (선택)",
+    geminiBaseUrlHint: "비워 두면 공식 엔드포인트를 사용합니다. Google에 연결할 수 없는 경우 Gemini 호환 프록시 주소를 입력하세요.",
+    rememberKey: "이 기기에 저장 (선택하지 않으면 탭을 닫을 때 삭제)",
+    verifyKey: "확인 및 모델 불러오기",
+    removeKey: "등록 해제",
+    keyBound: "등록됨",
+    keyNotBound: "미등록",
+    keyVerified: "확인 완료: 사용 가능한 모델 {n}개.",
+    keyCheckFailed: "키 확인 실패: ",
+    needKeyTitle: "먼저 Gemini API 키를 등록하세요",
+    needKeyDesc: "이 데모에는 키가 포함되어 있지 않습니다. 설정에서 본인의 키를 입력하세요. 키는 브라우저에만 저장됩니다.",
+    bindKeyBtn: "API 키 등록",
+    requestFailed: "요청 실패: ",
+    networkError: "API 주소에 연결할 수 없습니다. 네트워크를 확인하거나 설정에서 접속 가능한 프록시 주소를 입력하세요.",
+    dismiss: "닫기"
   },
   ja: {
     analysis: "分析レポート",
@@ -429,7 +494,7 @@ const translations = {
     noBookmarks: "保存された論文はありません。",
     noTopics: "追跡中のトピックはありません。",
     defaultSystemModels: "デフォルトシステムモデル",
-    defaultModelsDesc: "カスタムAIが無効な場合、Google Geminiを搭載した以下のモデルが使用されます。",
+    defaultModelsDesc: "キーで利用できるモデルから選択します。下のカスタム AI を有効にすると、詳細分析はそのモデルを使います。",
     fastModel: "高速モデル (分析、チャット)",
     reasoningModel: "推論モデル (詳細分析、検索)",
     entityDist: "エンティティ分布",
@@ -440,7 +505,26 @@ const translations = {
     searchPlaceholder: "概念、事実、またはデータを検索...",
     searchBtn: "検索",
     sources: "情報源",
-    searching: "検索中..."
+    searching: "検索中...",
+    geminiKeyTitle: "Gemini API キー",
+    geminiKeyDesc: "分析・翻訳・検索・Q&A はご自身のキーで Google Gemini を使って実行します。始める前にキーを登録してください。",
+    geminiKeyPrivacy: "キーはこのブラウザにのみ保存されます。リクエストはブラウザから下記のアドレスへ直接送られ、本サイトのサーバーはキーもテキストも受け取りません。",
+    getKeyLink: "Google AI Studio で無料キーを取得",
+    geminiBaseUrl: "API アドレス（任意）",
+    geminiBaseUrlHint: "空欄なら公式エンドポイントを使います。Google に接続できない場合は Gemini 互換プロキシのアドレスを入力してください。",
+    rememberKey: "このデバイスに保存（オフの場合はタブを閉じると消去）",
+    verifyKey: "確認してモデルを取得",
+    removeKey: "登録解除",
+    keyBound: "登録済み",
+    keyNotBound: "未登録",
+    keyVerified: "確認完了：利用可能なモデル {n} 件。",
+    keyCheckFailed: "キーの確認に失敗しました：",
+    needKeyTitle: "まず Gemini API キーを登録してください",
+    needKeyDesc: "このデモにはキーが含まれていません。設定でご自身のキーを入力してください。キーはブラウザにのみ保存されます。",
+    bindKeyBtn: "API キーを登録",
+    requestFailed: "リクエストに失敗しました：",
+    networkError: "API アドレスに接続できません。ネットワークを確認するか、設定で接続可能なプロキシのアドレスを入力してください。",
+    dismiss: "閉じる"
   }
 };
 
@@ -450,7 +534,10 @@ const App: React.FC = () => {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'translation' | 'critique' | 'discovery' | 'settings' | 'library' | 'search'>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [uiLanguage, setUiLanguage] = useState<UILanguage>('en');
+  const [uiLanguage, setUiLanguage] = useState<UILanguage>(() => {
+    const nav = (navigator.language || '').toLowerCase();
+    return nav.startsWith('zh') ? 'zh' : nav.startsWith('ko') ? 'ko' : nav.startsWith('ja') ? 'ja' : 'en';
+  });
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
 
   // Auxiliary States for Features
@@ -488,6 +575,25 @@ const App: React.FC = () => {
   const [isCheckingModels, setIsCheckingModels] = useState(false);
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [modelFetchSuccess, setModelFetchSuccess] = useState<string | null>(null);
+
+  // Gemini key bound by the visitor: localStorage when "remember" is on, sessionStorage otherwise
+  const [geminiConfig, setGeminiConfigState] = useState<GeminiConfig & { remember: boolean }>(() => {
+    const empty = { apiKey: '', baseUrl: '', fastModel: '', smartModel: '', remember: true };
+    try {
+      const saved = localStorage.getItem('scholarMind_gemini') || sessionStorage.getItem('scholarMind_gemini');
+      return saved ? { ...empty, ...JSON.parse(saved) } : empty;
+    } catch (e) {
+      return empty;
+    }
+  });
+  const [geminiModels, setGeminiModels] = useState<ModelOption[]>([]);
+  const [isCheckingKey, setIsCheckingKey] = useState(false);
+  const [keyCheckError, setKeyCheckError] = useState<string | null>(null);
+  const [keyCheckSuccess, setKeyCheckSuccess] = useState<string | null>(null);
+  const hasKey = geminiConfig.apiKey.trim() !== '';
+
+  // Last failed request, shown as a banner above the current view
+  const [aiNotice, setAiNotice] = useState<string | null>(null);
 
   // Settings State
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
@@ -570,6 +676,30 @@ const App: React.FC = () => {
     localStorage.setItem('scholarMind_bookmarks', JSON.stringify(bookmarks));
   }, [bookmarks]);
 
+  // Effect: Persist the Gemini key where the visitor asked
+  useEffect(() => {
+    setGeminiConfig(geminiConfig);
+    try {
+      const data = JSON.stringify(geminiConfig);
+      if (!hasKey) {
+        localStorage.removeItem('scholarMind_gemini');
+        sessionStorage.removeItem('scholarMind_gemini');
+      } else if (geminiConfig.remember) {
+        localStorage.setItem('scholarMind_gemini', data);
+        sessionStorage.removeItem('scholarMind_gemini');
+      } else {
+        sessionStorage.setItem('scholarMind_gemini', data);
+        localStorage.removeItem('scholarMind_gemini');
+      }
+    } catch (e) {
+      // storage blocked: the key still works for this page view
+    }
+  }, [geminiConfig]);
+
+  useEffect(() => {
+    document.documentElement.lang = uiLanguage === 'zh' ? 'zh-CN' : uiLanguage;
+  }, [uiLanguage]);
+
   // Effect: Persist Custom AI Config
   useEffect(() => {
     localStorage.setItem('scholarMind_customAI', JSON.stringify(customAiConfig));
@@ -587,8 +717,33 @@ const App: React.FC = () => {
     }
   }, [result]);
 
+  const errorText = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error);
+    // fetch() itself failed: endpoint unreachable (common where Google is blocked) or refused by CORS
+    if (/^(Failed to fetch|NetworkError|Load failed)/.test(raw)) return t.networkError;
+    // The SDK wraps the API's JSON body; surface its message when there is one
+    const m = raw.match(/"message"\s*:\s*"([^"]+)"/);
+    return (m ? m[1] : raw).slice(0, 300);
+  };
+
+  const reportError = (error: unknown) => {
+    if (error instanceof MissingKeyError) {
+      setActiveTab('settings');
+      return;
+    }
+    setAiNotice(t.requestFailed + errorText(error));
+  };
+
+  // Sends the visitor to Settings when no key is bound yet
+  const requireKey = () => {
+    if (hasKey) return true;
+    setActiveTab('settings');
+    return false;
+  };
+
   const handleAnalyze = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || !requireKey()) return;
+    setAiNotice(null);
     setStatus(AnalysisStatus.ANALYZING);
     try {
       const data = await analyzePaper(inputText, uiLanguage);
@@ -596,6 +751,7 @@ const App: React.FC = () => {
       setStatus(AnalysisStatus.COMPLETE);
     } catch (error) {
       console.error(error);
+      setAiNotice(t.requestFailed + errorText(error));
       setStatus(AnalysisStatus.ERROR);
     }
   };
@@ -604,12 +760,14 @@ const App: React.FC = () => {
     if (!inputText) return;
     // Don't re-run if already exists, unless forcing retry (handled by clearing state before calling)
     if (extendedAnalysis) return;
+    if (!customAiConfig.isEnabled && !requireKey()) return;
 
     setIsAnalysisLoading(true);
     try {
       const text = await generateExtendedAnalysis(inputText, uiLanguage, customAiConfig);
       setExtendedAnalysis(text);
     } catch (e) {
+      reportError(e);
       setExtendedAnalysis("Failed to generate analysis.");
     } finally {
       setIsAnalysisLoading(false);
@@ -618,6 +776,7 @@ const App: React.FC = () => {
 
   const handleRetryAnalysis = async () => {
     if (!inputText) return;
+    if (!customAiConfig.isEnabled && !requireKey()) return;
     
     // Clear previous analysis immediately
     setExtendedAnalysis(null);
@@ -629,6 +788,7 @@ const App: React.FC = () => {
       setExtendedAnalysis(text);
     } catch (e) {
       console.error("Retry failed:", e);
+      reportError(e);
       // Localize the error message based on current language
       const errorMsg = uiLanguage === 'zh' 
         ? "无法重新生成分析报告，请检查网络或配置后重试。" 
@@ -701,13 +861,14 @@ const App: React.FC = () => {
   };
 
   const handleTranslate = async () => {
-    if (!inputText) return;
+    if (!inputText || !requireKey()) return;
     setIsTranslating(true);
     try {
       const text = await translateText(inputText, targetLang);
       setTranslatedText(text);
     } catch (e) {
-      setTranslatedText("Translation failed.");
+      reportError(e);
+      setTranslatedText("");
     } finally {
       setIsTranslating(false);
     }
@@ -721,19 +882,21 @@ const App: React.FC = () => {
   };
 
   const handleContextualSearch = async () => {
-    if (!result?.keywords || relatedPapers.length > 0) return;
+    if (!result?.keywords || relatedPapers.length > 0 || !requireKey()) return;
     setIsSearchingContextual(true);
     try {
       const topKeywords = result.keywords.slice(0, 3).map(k => k.word).join(" ");
       const papers = await findRelatedWork(`Academic papers about ${topKeywords}`);
       setRelatedPapers(papers);
+    } catch (e) {
+      reportError(e);
     } finally {
       setIsSearchingContextual(false);
     }
   };
 
   const handlePersonalizedRecommendation = async () => {
-    if (userInterests.length === 0) return;
+    if (userInterests.length === 0 || !requireKey()) return;
     setIsSearchingPersonal(true);
     try {
       // Pick up to 4 random interests to diversify query
@@ -741,13 +904,15 @@ const App: React.FC = () => {
       const queryTerms = shuffled.slice(0, 4).join(", ");
       const papers = await findRelatedWork(`Latest academic research papers regarding: ${queryTerms}`);
       setRecommendedPapers(papers);
+    } catch (e) {
+      reportError(e);
     } finally {
       setIsSearchingPersonal(false);
     }
   };
 
   const handleWebSearch = async () => {
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim() || !requireKey()) return;
     setIsSearchingWeb(true);
     setSearchResult(null);
     try {
@@ -755,6 +920,7 @@ const App: React.FC = () => {
       setSearchResult(data);
     } catch (e) {
        console.error(e);
+       reportError(e);
     } finally {
       setIsSearchingWeb(false);
     }
@@ -778,6 +944,35 @@ const App: React.FC = () => {
     } finally {
       setIsCheckingModels(false);
     }
+  };
+
+  const handleCheckKey = async () => {
+    if (!hasKey) return;
+    setIsCheckingKey(true);
+    setKeyCheckError(null);
+    setKeyCheckSuccess(null);
+    try {
+      const models = await listGeminiModels(geminiConfig.apiKey, geminiConfig.baseUrl);
+      setGeminiModels(models);
+      setKeyCheckSuccess(t.keyVerified.replace('{n}', String(models.length)));
+      setGeminiConfigState(prev => ({
+        ...prev,
+        fastModel: models.some(m => m.id === prev.fastModel) ? prev.fastModel : pickModel(models, 'flash', DEFAULT_FAST_MODEL),
+        smartModel: models.some(m => m.id === prev.smartModel) ? prev.smartModel : pickModel(models, 'pro', DEFAULT_SMART_MODEL),
+      }));
+    } catch (err) {
+      setGeminiModels([]);
+      setKeyCheckError(t.keyCheckFailed + errorText(err));
+    } finally {
+      setIsCheckingKey(false);
+    }
+  };
+
+  const handleUnbindKey = () => {
+    setGeminiConfigState(prev => ({ ...prev, apiKey: '', fastModel: '', smartModel: '' }));
+    setGeminiModels([]);
+    setKeyCheckError(null);
+    setKeyCheckSuccess(null);
   };
 
   const handleClearData = () => {
@@ -813,6 +1008,7 @@ const App: React.FC = () => {
     try {
       if (isPdf) {
         const arrayBuffer = await file.arrayBuffer();
+        const pdfjsLib = await loadPdfjs();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         let fullText = '';
         
@@ -926,8 +1122,8 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col md:flex-row font-serif text-stone-800 bg-stone-50 selection:bg-stone-200">
       
       {/* Sidebar Navigation */}
-      <aside className="w-full md:w-20 lg:w-64 bg-[#f7f7f5] border-r border-stone-200 flex-shrink-0 flex flex-col h-auto min-h-screen sticky top-0 z-10">
-        <div className="p-6 flex items-center justify-between">
+      <aside className="fixed bottom-0 inset-x-0 md:inset-auto md:sticky md:top-0 w-full md:w-20 lg:w-64 bg-[#f7f7f5] border-t md:border-t-0 md:border-r border-stone-200 flex-shrink-0 flex flex-row md:flex-col h-auto md:min-h-screen z-30">
+        <div className="hidden md:flex p-6 items-center justify-between">
           <div className="flex items-center gap-3 group cursor-pointer">
              {/* Logo Mark */}
              <div className="w-10 h-10 bg-stone-900 rounded-xl flex items-center justify-center shadow-[0_2px_10px_-4px_rgba(0,0,0,0.2)] text-stone-50 transition-transform group-hover:scale-105">
@@ -942,7 +1138,7 @@ const App: React.FC = () => {
         </div>
         
         {/* Language Toggle */}
-        <div className="px-4 py-4 border-b border-stone-200 flex justify-center lg:justify-start relative">
+        <div className="hidden md:flex px-4 py-4 border-b border-stone-200 justify-center lg:justify-start relative">
            <button 
              onClick={() => setIsLangMenuOpen(!isLangMenuOpen)}
              className="flex items-center gap-2 bg-white hover:bg-stone-100 border border-stone-200 text-stone-600 px-3 py-1.5 rounded-full text-sm transition-colors shadow-sm w-full lg:w-auto justify-center lg:justify-start"
@@ -968,53 +1164,53 @@ const App: React.FC = () => {
            )}
         </div>
 
-        <nav className="flex-1 p-4 space-y-2">
-          <button 
+        <nav className="flex-1 flex md:block justify-around p-1.5 md:p-4 md:space-y-2">
+          <button aria-label={t.analysis} title={t.analysis} 
             onClick={() => setActiveTab('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'dashboard' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'}`}
+            className={`md:w-full flex items-center justify-center lg:justify-start gap-3 px-3 md:px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'dashboard' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'}`}
           >
             <Activity size={20} className={activeTab === 'dashboard' ? 'text-stone-800' : 'text-stone-400'} />
             <span className="hidden lg:block">{t.analysis}</span>
           </button>
 
-          <button 
+          <button aria-label={t.translation} title={t.translation} 
              onClick={() => setActiveTab('translation')}
              disabled={!result}
-             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'translation' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'} ${!result ? 'opacity-40 cursor-not-allowed' : ''}`}
+             className={`md:w-full flex items-center justify-center lg:justify-start gap-3 px-3 md:px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'translation' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'} ${!result ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             <Globe size={20} className={activeTab === 'translation' ? 'text-stone-800' : 'text-stone-400'} />
             <span className="hidden lg:block">{t.translation}</span>
           </button>
 
-          <button 
+          <button aria-label={t.critique} title={t.critique} 
              onClick={() => { setActiveTab('critique'); if (result) handleExtendedAnalysis(); }}
              disabled={!result}
-             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'critique' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'} ${!result ? 'opacity-40 cursor-not-allowed' : ''}`}
+             className={`md:w-full flex items-center justify-center lg:justify-start gap-3 px-3 md:px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'critique' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'} ${!result ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             <Lightbulb size={20} className={activeTab === 'critique' ? 'text-stone-800' : 'text-stone-400'} />
             <span className="hidden lg:block">{t.critique}</span>
           </button>
 
-          <button 
+          <button aria-label={t.discovery} title={t.discovery} 
             onClick={() => { setActiveTab('discovery'); if (result) handleContextualSearch(); }}
             disabled={!result}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'discovery' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'} ${!result ? 'opacity-40 cursor-not-allowed' : ''}`}
+            className={`md:w-full flex items-center justify-center lg:justify-start gap-3 px-3 md:px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'discovery' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'} ${!result ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             <Compass size={20} className={activeTab === 'discovery' ? 'text-stone-800' : 'text-stone-400'} />
             <span className="hidden lg:block">{t.discovery}</span>
           </button>
           
-          <button 
+          <button aria-label={t.webSearch} title={t.webSearch} 
             onClick={() => setActiveTab('search')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'search' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'}`}
+            className={`md:w-full flex items-center justify-center lg:justify-start gap-3 px-3 md:px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'search' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'}`}
           >
             <Search size={20} className={activeTab === 'search' ? 'text-stone-800' : 'text-stone-400'} />
             <span className="hidden lg:block">{t.webSearch}</span>
           </button>
 
-          <button 
+          <button aria-label={t.settings} title={t.settings} 
             onClick={() => setActiveTab('settings')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'settings' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'}`}
+            className={`md:w-full flex items-center justify-center lg:justify-start gap-3 px-3 md:px-4 py-3 rounded-lg transition-all duration-200 ${activeTab === 'settings' ? 'bg-white text-stone-900 shadow-sm ring-1 ring-stone-950/5 font-medium' : 'text-stone-500 hover:bg-stone-200/50 hover:text-stone-800'}`}
           >
             <SettingsIcon size={20} className={activeTab === 'settings' ? 'text-stone-800' : 'text-stone-400'} />
             <span className="hidden lg:block">{t.settings}</span>
@@ -1039,9 +1235,10 @@ const App: React.FC = () => {
            </div>
         </button>
 
-        <div className="p-4 border-t border-stone-200">
+        <div className="p-1.5 md:p-4 md:border-t border-stone-200">
           <button 
             onClick={() => setIsChatOpen(true)}
+            aria-label={t.askPaper}
             disabled={!result}
             className={`w-full flex items-center justify-center gap-2 bg-stone-900 hover:bg-stone-800 text-stone-50 p-3 rounded-xl font-medium transition-all shadow-lg shadow-stone-900/10 ${!result ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
@@ -1052,7 +1249,7 @@ const App: React.FC = () => {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 bg-[#fafaf9] min-h-screen relative overflow-x-hidden">
+      <main className="flex-1 bg-[#fafaf9] min-h-screen relative overflow-x-hidden pb-20 md:pb-0">
         
         {/* Top Bar (Mobile Title) */}
         <div className="md:hidden bg-[#f7f7f5] text-stone-900 p-4 flex items-center justify-between sticky top-0 z-20 border-b border-stone-200">
@@ -1071,6 +1268,16 @@ const App: React.FC = () => {
         </div>
 
         <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
+
+          {aiNotice && (
+            <div role="alert" className="max-w-3xl mx-auto flex items-start gap-3 bg-rose-50 border border-rose-100 text-rose-800 px-4 py-3 rounded-xl text-sm">
+              <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
+              <p className="flex-1 break-words">{aiNotice}</p>
+              <button onClick={() => setAiNotice(null)} aria-label={t.dismiss} className="text-rose-400 hover:text-rose-700">
+                <XIcon size={16} />
+              </button>
+            </div>
+          )}
           
           {/* Input Section - Only show if no result and not in settings */}
           {status === AnalysisStatus.IDLE && activeTab !== 'settings' && activeTab !== 'library' && activeTab !== 'search' && (
@@ -1084,6 +1291,24 @@ const App: React.FC = () => {
                   {t.evaluateSubtitle}
                 </p>
               </div>
+
+              {!hasKey && (
+                <div className="flex flex-col sm:flex-row items-center gap-4 text-left bg-amber-50 border border-amber-200 rounded-xl p-5">
+                  <div className="p-2 bg-white rounded-lg text-amber-600 ring-1 ring-amber-200">
+                    <Key size={20} />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-medium text-stone-800">{t.needKeyTitle}</p>
+                    <p className="text-sm text-stone-600 mt-1">{t.needKeyDesc}</p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('settings')}
+                    className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-sm font-medium whitespace-nowrap"
+                  >
+                    {t.bindKeyBtn}
+                  </button>
+                </div>
+              )}
               
               <div className="relative group">
                 {isExtracting && (
@@ -1185,7 +1410,7 @@ const App: React.FC = () => {
            {status === AnalysisStatus.ERROR && (
             <div className="bg-rose-50 border border-rose-100 text-rose-800 p-8 rounded-xl text-center shadow-sm">
               <p>{t.error}</p>
-              <button onClick={() => setStatus(AnalysisStatus.IDLE)} className="mt-4 text-sm font-semibold hover:text-rose-950 underline decoration-rose-300 underline-offset-4">{t.tryAgain}</button>
+              <button onClick={() => { setStatus(AnalysisStatus.IDLE); setAiNotice(null); }} className="mt-4 text-sm font-semibold hover:text-rose-950 underline decoration-rose-300 underline-offset-4">{t.tryAgain}</button>
             </div>
           )}
 
@@ -1902,32 +2127,128 @@ const App: React.FC = () => {
                
                <div className="space-y-12">
                   
-                  {/* Default System Models Section */}
+                  {/* Gemini API Key Section */}
                   <div className="border-b border-stone-100 pb-8">
-                     <div className="flex items-start gap-4 mb-6">
-                        <div className="p-2 bg-stone-100 rounded-lg text-stone-600">
-                           <Cpu size={24} strokeWidth={1.5} />
+                     <div className="flex justify-between items-start gap-4 mb-6">
+                        <div className="flex items-start gap-4">
+                           <div className="p-2 bg-stone-100 rounded-lg text-stone-600">
+                              <Key size={24} strokeWidth={1.5} />
+                           </div>
+                           <div>
+                              <h3 className="text-lg font-medium text-stone-800">{t.geminiKeyTitle}</h3>
+                              <p className="text-stone-500 text-sm mt-1">{t.geminiKeyDesc}</p>
+                           </div>
                         </div>
-                        <div>
-                           <h3 className="text-lg font-medium text-stone-800">{t.defaultSystemModels}</h3>
-                           <p className="text-stone-500 text-sm mt-1">{t.defaultModelsDesc}</p>
-                        </div>
+                        <span className={`text-xs font-bold uppercase tracking-wider whitespace-nowrap ${hasKey ? 'text-emerald-600' : 'text-amber-600'}`}>
+                           {hasKey ? t.keyBound : t.keyNotBound}
+                        </span>
                      </div>
 
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="p-4 bg-stone-50 border border-stone-200 rounded-lg flex items-center justify-between">
-                           <div className="flex items-center gap-3">
-                              <Zap size={18} className="text-amber-500" fill="currentColor" />
-                              <span className="text-sm font-medium text-stone-700">{t.fastModel}</span>
+                     <div className="space-y-4">
+                        <div>
+                           <label htmlFor="gemini-key" className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-2">{t.apiKey}</label>
+                           <div className="relative">
+                              <Key size={16} className="absolute left-3 top-3 text-stone-400" />
+                              <input
+                                id="gemini-key"
+                                type="password"
+                                autoComplete="off"
+                                spellCheck={false}
+                                value={geminiConfig.apiKey}
+                                onChange={(e) => { setGeminiConfigState(prev => ({ ...prev, apiKey: e.target.value })); setKeyCheckSuccess(null); setKeyCheckError(null); }}
+                                placeholder="AIza..."
+                                className="w-full pl-10 pr-4 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-stone-200 transition-all font-mono"
+                              />
                            </div>
-                           <span className="text-xs font-semibold tracking-tight bg-white px-2.5 py-1 rounded-md border border-stone-200 text-stone-600 shadow-sm">Gemini 3 Flash (Preview)</span>
+                           <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-stone-500 hover:text-stone-800 mt-2 underline decoration-stone-300 underline-offset-4">
+                              {t.getKeyLink} <ExternalLink size={12} />
+                           </a>
                         </div>
-                        <div className="p-4 bg-stone-50 border border-stone-200 rounded-lg flex items-center justify-between">
-                           <div className="flex items-center gap-3">
-                              <BrainCircuit size={18} className="text-indigo-500" />
-                              <span className="text-sm font-medium text-stone-700">{t.reasoningModel}</span>
+
+                        <div>
+                           <label htmlFor="gemini-base" className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-2">{t.geminiBaseUrl}</label>
+                           <div className="relative">
+                              <Globe size={16} className="absolute left-3 top-3 text-stone-400" />
+                              <input
+                                id="gemini-base"
+                                type="url"
+                                spellCheck={false}
+                                value={geminiConfig.baseUrl}
+                                onChange={(e) => setGeminiConfigState(prev => ({ ...prev, baseUrl: e.target.value }))}
+                                placeholder="https://generativelanguage.googleapis.com"
+                                className="w-full pl-10 pr-4 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-stone-200 transition-all font-mono"
+                              />
                            </div>
-                           <span className="text-xs font-semibold tracking-tight bg-white px-2.5 py-1 rounded-md border border-stone-200 text-stone-600 shadow-sm">Gemini 3 Pro (Preview)</span>
+                           <p className="text-xs text-stone-400 mt-2">{t.geminiBaseUrlHint}</p>
+                        </div>
+
+                        <label className="flex items-center gap-2 text-sm text-stone-600 cursor-pointer select-none">
+                           <input
+                             type="checkbox"
+                             checked={geminiConfig.remember}
+                             onChange={(e) => setGeminiConfigState(prev => ({ ...prev, remember: e.target.checked }))}
+                             className="w-4 h-4 accent-stone-800"
+                           />
+                           {t.rememberKey}
+                        </label>
+
+                        <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                           <button
+                              onClick={handleCheckKey}
+                              disabled={isCheckingKey || !hasKey}
+                              className="flex items-center justify-center gap-2 px-4 py-2 bg-stone-900 text-white rounded-lg text-sm hover:bg-stone-800 disabled:opacity-50 transition-colors shadow-sm font-medium"
+                           >
+                              {isCheckingKey ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+                              {t.verifyKey}
+                           </button>
+                           {hasKey && (
+                             <button
+                                onClick={handleUnbindKey}
+                                className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-stone-200 text-stone-600 rounded-lg text-sm hover:bg-stone-50 transition-colors font-medium"
+                             >
+                                <Trash2 size={16} />
+                                {t.removeKey}
+                             </button>
+                           )}
+                        </div>
+
+                        {keyCheckError && <p className="text-xs text-rose-500 break-words">{keyCheckError}</p>}
+                        {keyCheckSuccess && <p className="text-xs text-emerald-600">{keyCheckSuccess}</p>}
+
+                        <p className="flex items-start gap-2 text-xs text-stone-500 bg-stone-50 border border-stone-200 rounded-lg p-3">
+                           <ShieldCheck size={14} className="flex-shrink-0 mt-0.5 text-stone-400" />
+                           {t.geminiKeyPrivacy}
+                        </p>
+                     </div>
+
+                     <div className="mt-6">
+                        <p className="text-xs text-stone-500 mb-3">{t.defaultModelsDesc}</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                           {([
+                             ['fastModel', t.fastModel, <Zap size={18} className="text-amber-500" fill="currentColor" />, DEFAULT_FAST_MODEL],
+                             ['smartModel', t.reasoningModel, <BrainCircuit size={18} className="text-indigo-500" />, DEFAULT_SMART_MODEL],
+                           ] as const).map(([field, label, icon, fallback]) => (
+                             <div key={field} className="p-4 bg-stone-50 border border-stone-200 rounded-lg space-y-3">
+                                <div className="flex items-center gap-3">
+                                   {icon}
+                                   <span className="text-sm font-medium text-stone-700">{label}</span>
+                                </div>
+                                {geminiModels.length > 0 ? (
+                                  <select
+                                    value={geminiConfig[field] || fallback}
+                                    onChange={(e) => setGeminiConfigState(prev => ({ ...prev, [field]: e.target.value }))}
+                                    className="w-full px-3 py-2 bg-white border border-stone-200 rounded-md text-xs font-mono focus:outline-none focus:ring-2 focus:ring-stone-200"
+                                  >
+                                     {!geminiModels.some(m => m.id === (geminiConfig[field] || fallback)) && (
+                                       <option value={geminiConfig[field] || fallback}>{geminiConfig[field] || fallback}</option>
+                                     )}
+                                     {geminiModels.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
+                                  </select>
+                                ) : (
+                                  <span className="inline-block text-xs font-mono bg-white px-2.5 py-1 rounded-md border border-stone-200 text-stone-600">{geminiConfig[field] || fallback}</span>
+                                )}
+                             </div>
+                           ))}
                         </div>
                      </div>
                   </div>
@@ -2050,6 +2371,7 @@ const App: React.FC = () => {
         onClose={() => setIsChatOpen(false)} 
         contextText={inputText}
         uiLanguage={uiLanguage}
+        onNeedKey={() => { setIsChatOpen(false); setActiveTab('settings'); }}
       />
 
       {/* Clear Data Confirmation Modal */}

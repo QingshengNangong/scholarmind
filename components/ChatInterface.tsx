@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, X, Bot, User, Loader2 } from 'lucide-react';
 import { ChatMessage, UILanguage } from '../types';
-import { chatWithPaper } from '../services/geminiService';
+import { chatWithPaper, MissingKeyError } from '../services/geminiService';
 import { GenerateContentResponse } from '@google/genai';
 
 interface ChatInterfaceProps {
@@ -10,9 +10,10 @@ interface ChatInterfaceProps {
   onClose: () => void;
   contextText: string;
   uiLanguage: UILanguage;
+  onNeedKey: () => void;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, contextText, uiLanguage }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, contextText, uiLanguage, onNeedKey }) => {
   const strings = {
     en: {
       initialMsg: "Hello! I've analyzed the paper. Ask me anything about it.",
@@ -98,6 +99,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, contextT
       }
 
     } catch (error) {
+      if (error instanceof MissingKeyError) {
+        onNeedKey();
+        return;
+      }
       setMessages(prev => [...prev, { 
         id: Date.now().toString(), 
         role: 'model', 

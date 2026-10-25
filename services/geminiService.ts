@@ -2,12 +2,75 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { AnalysisResult, RelatedPaper, UILanguage, CustomAIConfig, ModelOption, SearchResult } from "../types";
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Gemini client, built from the key the visitor binds in Settings.
+// The key stays in the visitor's browser; requests go straight to the Gemini API (or to the proxy they name).
+export const DEFAULT_FAST_MODEL = 'gemini-3-flash-preview';
+export const DEFAULT_SMART_MODEL = 'gemini-3-pro-preview';
 
-// Models
-const MODEL_FAST = 'gemini-3-flash-preview';
-const MODEL_SMART = 'gemini-3-pro-preview';
+export interface GeminiConfig {
+  apiKey: string;
+  baseUrl: string; // optional; empty means https://generativelanguage.googleapis.com
+  fastModel: string;
+  smartModel: string;
+}
+
+export class MissingKeyError extends Error {
+  constructor() {
+    super('No Gemini API key bound.');
+    this.name = 'MissingKeyError';
+  }
+}
+
+let geminiConfig: GeminiConfig = { apiKey: '', baseUrl: '', fastModel: '', smartModel: '' };
+let client: GoogleGenAI | null = null;
+
+const makeClient = (apiKey: string, baseUrl: string) => new GoogleGenAI({
+  apiKey,
+  ...(baseUrl.trim() ? { httpOptions: { baseUrl: baseUrl.trim().replace(/\/+$/, '') } } : {}),
+});
+
+export const setGeminiConfig = (config: GeminiConfig) => {
+  geminiConfig = { ...config, apiKey: config.apiKey.trim() };
+  client = null;
+};
+
+const ai = (): GoogleGenAI => {
+  if (!geminiConfig.apiKey) throw new MissingKeyError();
+  if (!client) client = makeClient(geminiConfig.apiKey, geminiConfig.baseUrl);
+  return client;
+};
+
+const fastModel = () => geminiConfig.fastModel || DEFAULT_FAST_MODEL;
+const smartModel = () => geminiConfig.smartModel || DEFAULT_SMART_MODEL;
+
+/**
+ * Lists the Gemini models this key can call with generateContent. Doubles as the key check.
+ */
+export const listGeminiModels = async (apiKey: string, baseUrl: string): Promise<ModelOption[]> => {
+  const pager = await makeClient(apiKey.trim(), baseUrl).models.list({ config: { pageSize: 100 } });
+  const models: ModelOption[] = [];
+  for await (const m of pager) {
+    if (!m.name || (m.supportedActions && !m.supportedActions.includes('generateContent'))) continue;
+    const id = m.name.replace(/^models\//, '');
+    models.push({ id, name: m.displayName || id });
+  }
+  return models;
+};
+
+/**
+ * Picks a default from the listed models: the preferred id if offered, else the newest
+ * plain text model of that tier (skips lite / image / tts / audio / embedding variants).
+ */
+export const pickModel = (models: ModelOption[], tier: 'flash' | 'pro', preferred: string): string => {
+  if (models.some(m => m.id === preferred)) return preferred;
+  const version = (id: string) => parseFloat(id.match(/^gemini-(\d+(?:\.\d+)?)/)?.[1] || '0');
+  const tierRe = new RegExp(`^gemini-\\d+(?:\\.\\d+)?-${tier}(?:-preview|-latest|$)`);
+  const candidates = models
+    .map(m => m.id)
+    .filter(id => tierRe.test(id) && !/lite|image|tts|audio|live|embedding/.test(id))
+    .sort((a, b) => version(b) - version(a) || a.length - b.length);
+  return candidates[0] || models[0]?.id || preferred;
+};
 
 /**
  * Performs a comprehensive analysis of the academic text.
@@ -130,8 +193,8 @@ export const analyzePaper = async (text: string, language: UILanguage = 'en'): P
   };
 
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_FAST,
+    const response = await ai().models.generateContent({
+      model: fastModel(),
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -153,7 +216,7 @@ export const analyzePaper = async (text: string, language: UILanguage = 'en'): P
     return result;
   } catch (error) {
     console.error("Analysis failed:", error);
-    throw new Error("Failed to analyze the paper. Please try again.");
+    throw error;
   }
 };
 
@@ -293,8 +356,8 @@ export const generateExtendedAnalysis = async (
 
   // 2. Default Gemini Implementation
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_SMART, // Use Pro for better reasoning
+    const response = await ai().models.generateContent({
+      model: smartModel(), // Use Pro for better reasoning
       contents: `${systemPrompt}\n${userPrompt}`,
     });
     const content = response.text || "No analysis generated.";
@@ -310,8 +373,8 @@ export const generateExtendedAnalysis = async (
  */
 export const translateText = async (text: string, targetLanguage: string): Promise<string> => {
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_FAST,
+    const response = await ai().models.generateContent({
+      model: fastModel(),
       contents: `
         Translate the following academic text into ${targetLanguage}. 
         IMPORTANT:
@@ -326,7 +389,7 @@ export const translateText = async (text: string, targetLanguage: string): Promi
     return response.text || "Translation failed.";
   } catch (error) {
     console.error("Translation failed:", error);
-    return "Error generating translation. Please try again.";
+    throw error;
   }
 };
 
@@ -340,9 +403,9 @@ export const performWebSearch = async (query: string, language: UILanguage = 'en
   else if (language === 'ja') langInstruction = "Answer in Japanese.";
 
   try {
-    const response = await ai.models.generateContent({
-      // Use MODEL_SMART (Gemini 3 Pro) for Search to ensure consistent grounding chunks
-      model: MODEL_SMART, 
+    const response = await ai().models.generateContent({
+      // Use the reasoning model for Search to ensure consistent grounding chunks
+      model: smartModel(),
       // Explicitly instruct the model to use the search tool to ensure consistent tool usage
       contents: `Please use the Google Search tool to search for "${query}" and provide a detailed answer based on the search results. ${langInstruction}`,
       config: {
@@ -364,7 +427,7 @@ export const performWebSearch = async (query: string, language: UILanguage = 'en
     return { text, sources: uniqueSources };
   } catch (error) {
     console.error("Web search failed:", error);
-    throw new Error("Search failed. Please try again.");
+    throw error;
   }
 };
 
@@ -386,8 +449,8 @@ export const findRelatedWork = async (query: string): Promise<RelatedPaper[]> =>
       },
     };
 
-    const response = await ai.models.generateContent({
-      model: MODEL_SMART, // Search tool available on Pro
+    const response = await ai().models.generateContent({
+      model: smartModel(), // Search tool available on Pro
       contents: `Find 10 recent academic papers or articles related to: "${query}". Return the results as a structured JSON list. For each result, provide the title, the direct url, and a relevant snippet or brief summary (1-2 sentences) describing the paper.`,
       config: {
         tools: [{ googleSearch: {} }],
@@ -423,6 +486,7 @@ export const findRelatedWork = async (query: string): Promise<RelatedPaper[]> =>
     return papers || [];
   } catch (error) {
     console.error("Related work search failed:", error);
+    if (error instanceof MissingKeyError) throw error;
     return [];
   }
 };
@@ -441,8 +505,8 @@ export const chatWithPaper = async (
   else if (language === 'ko') langInstruction = "Respond in Korean.";
   else if (language === 'ja') langInstruction = "Respond in Japanese.";
 
-  const chat = ai.chats.create({
-    model: MODEL_FAST,
+  const chat = ai().chats.create({
+    model: fastModel(),
     history: [
       {
         role: "user",
