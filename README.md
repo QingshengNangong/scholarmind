@@ -132,4 +132,4 @@ Web: React 19, TypeScript, Vite, Tailwind CSS, D3, Recharts, pdf.js and the Goog
 
 ## License
 
-[MIT](LICENSE) © 2025-2026 Xia Mingtao (夏明涛)
+[MIT](LICENSE) © 2025-2026 Mingtao Xia
