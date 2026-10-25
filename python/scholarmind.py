@@ -12,7 +12,7 @@
 
 技术栈：SpaCy, NetworkX, Matplotlib, NumPy
 
-作者：夏明涛
+作者：Mingtao Xia
 课程：自然语言处理（英语）
 """
 
