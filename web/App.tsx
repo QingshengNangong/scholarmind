@@ -1310,7 +1310,7 @@ const App: React.FC = () => {
                 </div>
               )}
               
-              <div className="relative group">
+              <div className="relative group bg-stone-50 border border-stone-200 rounded-xl focus-within:ring-2 focus-within:ring-stone-200 focus-within:border-stone-400 transition-all">
                 {isExtracting && (
                   <div className="absolute inset-0 z-10 bg-white/80 flex flex-col items-center justify-center rounded-xl backdrop-blur-sm">
                     <Loader2 className="animate-spin text-stone-800 mb-2" size={32} />
@@ -1321,9 +1321,9 @@ const App: React.FC = () => {
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   placeholder={t.placeholder}
-                  className="w-full h-48 p-6 bg-stone-50 border border-stone-200 rounded-xl focus:ring-2 focus:ring-stone-200 focus:border-stone-400 focus:outline-none resize-none transition-all text-sm md:text-base placeholder:text-stone-400"
+                  className="block w-full h-48 p-6 pb-2 bg-transparent rounded-t-xl focus:outline-none resize-none text-sm md:text-base placeholder:text-stone-400"
                 />
-                <div className="absolute bottom-4 right-4 flex gap-2">
+                <div className="flex flex-wrap justify-end gap-2 px-4 pb-3 pt-1">
                   <input 
                     type="file" 
                     accept=".pdf,.txt,application/pdf,text/plain" 

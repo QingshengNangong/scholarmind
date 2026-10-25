@@ -1,0 +1,5 @@
+# Tested with Python 3.10, spaCy 3.8.7, NumPy 1.26.4, NetworkX 3.3, Matplotlib 3.10.7
+spacy>=3.6,<4
+numpy>=1.24
+networkx>=3.0
+matplotlib>=3.7

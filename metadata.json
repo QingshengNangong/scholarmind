@@ -1,5 +1,0 @@
-{
-  "name": "ScholarMind - Paper Assistant",
-  "description": "An advanced academic paper reading assistant powered by Gemini. Features automatic summarization, concept graphs, entity extraction, critique generation, and related work search.",
-  "requestFramePermissions": []
-}
